@@ -47,7 +47,8 @@ def run_institutional_quant_bot():
 
   # Flatten MultiIndex columns if necessary
   if isinstance(df.columns, pd.MultiIndex):
-    df.columns = df.columns.get_level_0
+   if isinstance(df.columns, pd.MultiIndex):
+  df.columns = df.columns.get_level_values(0)
 
   # 2. Exclude the live/unclosed candle to avoid latency artifacts
   df = df.iloc[:-1]
