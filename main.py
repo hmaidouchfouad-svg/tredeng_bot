@@ -1,100 +1,134 @@
-from datetime import datetime
 import os
-import numpy as np
+import sys
 import pandas as pd
 import requests
 import yfinance as yf
 
-TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
-CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
-SYMBOL = "GC=F"
 
+def send_telegram_alert(message):
+  """Sends an alert directly to Telegram using environment variables."""
+  token = os.environ.get("TELEGRAM_TOKEN")
+  chat_id = os.environ.get("TELEGRAM_CHAT_ID")
 
-def send_telegram(msg):
-  if not TELEGRAM_TOKEN or not CHAT_ID:
-    print("[ERROR] Telegram secrets missing!")
-    return
-  try:
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    payload = {"chat_id": CHAT_ID, "text": msg}
-    res = requests.post(url, json=payload, timeout=10)
-    print(f"[INFO] Telegram status code: {res.status_code}")
-  except Exception as e:
-    print(f"[ERROR] Telegram failed: {e}")
-
-
-def calculate_lsma(series, window=73):
-  """حساب LSMA (Least Squares Moving Average) بشكل مستقل"""
-  if len(series) < window:
-    return series.iloc[-1]
-
-  y = series.tail(window).values
-  x = np.arange(window)
-  slope, intercept = np.polyfit(x, y, 1)
-  return slope * (window - 1) + intercept
-
-
-def calculate_mfi(df, window=14):
-  """حساب MFI (Money Flow Index) بشكل مستقل"""
-  typical_price = (df["high"] + df["low"] + df["close"]) / 3
-  money_flow = typical_price * df["volume"]
-
-  delta = typical_price.diff()
-  pos_flow = np.where(delta > 0, money_flow, 0)
-  neg_flow = np.where(delta < 0, money_flow, 0)
-
-  pos_mf = pd.Series(pos_flow).rolling(window=window).sum()
-  neg_mf = pd.Series(neg_flow).rolling(window=window).sum()
-
-  mfr = pos_mf / (neg_mf + 1e-10)
-  mfi = 100 - (100 / (1 + mfr))
-  return mfi.iloc[-1] if not mfi.empty else 50.0
-
-
-def run_engine():
-  print("--- RUNNING TRADING BOT CYCLE ---")
-  try:
-    data = yf.Ticker(SYMBOL)
-    df = data.history(period="5d", interval="5m")
-
-    if df.empty:
-      print("[WARNING] No data fetched from Yahoo Finance.")
-      return
-
-    df.columns = [str(c).lower() for c in df.columns]
-
-    price = float(df["close"].iloc[-1])
-    lsma = float(calculate_lsma(df["close"], window=73))
-    mfi = float(calculate_mfi(df, window=14))
-
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+  if not token or not chat_id:
     print(
-        f"[{timestamp}] Price: {price:.2f} | LSMA: {lsma:.2f} | MFI: {mfi:.1f}"
+        "[-] Telegram configuration missing: TELEGRAM_TOKEN or TELEGRAM_CHAT_ID"
+        " not found."
     )
+    return
 
-    # إرسال رسالة تجريبية لتأكيد العمل والاتصال
-    status_msg = (
-        f"🤖 Bot Working Successfully!\n"
-        f"Symbol: GOLD (GC=F)\n"
-        f"Price: {price:.2f}\n"
-        f"LSMA: {lsma:.2f}\n"
-        f"MFI: {mfi:.1f}\n"
-        f"Time: {timestamp}"
-    )
+  url = f"https://api.telegram.org/bot{token}/sendMessage"
+  payload = {"chat_id": chat_id, "text": message, "parse_mode": "Markdown"}
 
-    if price > lsma and mfi > 50:
-      msg = f"🚀 GOLD BUY SIGNAL\nPrice: {price:.2f}\nMFI: {mfi:.1f}"
-      send_telegram(msg)
-    elif price < lsma and mfi < 50:
-      msg = f"📉 GOLD SELL SIGNAL\nPrice: {price:.2f}\nMFI: {mfi:.1f}"
-      send_telegram(msg)
+  try:
+    response = requests.post(url, json=payload, timeout=10)
+    if response.status_code == 200:
+      print("[+] Telegram alert sent successfully.")
     else:
-      # إرسال تقرير حالة في حالة التجربة
-      send_telegram(status_msg)
-
+      print(f"[-] Failed to send Telegram alert: {response.text}")
   except Exception as e:
-    print(f"[ERROR] Engine failure: {e}")
+    print(f"[-] Error connecting to Telegram: {e}")
+
+
+def run_institutional_quant_bot():
+  print(
+      "[*] Fetching Gold (GC=F) 5-minute data and running institutional"
+      " quantitative analysis..."
+  )
+
+  # 1. Fetch 5-minute data for the last 5 days
+  df = yf.download(
+      "GC=F", period="5d", interval="5m", progress=False, auto_adjust=True
+  )
+
+  if df.empty:
+    print("[-] Error: No market data retrieved.")
+    return
+
+  # Flatten MultiIndex columns if necessary
+  if isinstance(df.columns, pd.MultiIndex):
+    df.columns = df.columns.get_level_0
+
+  # 2. Exclude the live/unclosed candle to avoid latency artifacts
+  df = df.iloc[:-1]
+
+  if len(df) < 30:
+    print("[-] Error: Insufficient data points for statistical calculation.")
+    return
+
+  # 3. Calculate Volume Z-Score (20-period rolling window)
+  window = 20
+  df["Vol_Mean"] = df["Volume"].rolling(window=window).mean()
+  df["Vol_Std"] = df["Volume"].rolling(window=window).std()
+  df["Volume_ZScore"] = (df["Volume"] - df["Vol_Mean"]) / df["Vol_Std"]
+
+  # 4. Calculate Estimated Delta Proxy within the candle
+  candle_range = df["High"] - df["Low"]
+  df["Pressure"] = (
+      (2 * df["Close"] - df["High"] - df["Low"]) / candle_range
+  ).fillna(0)
+  df["Estimated_Delta"] = df["Volume"] * df["Pressure"]
+
+  # 5. Cumulative Delta Flow (10-period rolling window)
+  df["Cumulative_Delta"] = df["Estimated_Delta"].rolling(window=10).sum()
+
+  # 6. State Persistence (trend check over last 3 closed candles)
+  df["Trend_Persistence"] = (df["Close"] > df["Close"].shift(1)).rolling(
+      window=3
+  ).sum()
+
+  # Get the latest fully closed candle metrics
+  latest = df.iloc[-1]
+  current_price = float(latest["Close"])
+  z_score = float(latest["Volume_ZScore"])
+  cum_delta = float(latest["Cumulative_Delta"])
+  persistence = int(latest["Trend_Persistence"])
+
+  print(f"[*] Latest Closed Gold Price: {current_price:.2f}")
+  print(f"[*] Volume Z-Score: {z_score:.2f}")
+  print(f"[*] Cumulative Delta: {cum_delta:.2f}")
+  print(f"[*] Trend Persistence: {persistence}")
+
+  # 7. Rigorous Decision Logic Gate
+  alert_msg = ""
+
+  if z_score > 2.5:
+    # Bullish Institutional Accumulation / Continuation
+    if cum_delta > 0 and persistence >= 2:
+      alert_msg = (
+          "🟢 *[Confirmed Bullish Institutional Footprint]*\n\n"
+          f"• Asset: `Gold (GC=F)`\n"
+          f"• Closed Price: `{current_price:.2f}`\n"
+          f"• Volume Z-Score: `{z_score:.2f}`\n"
+          f"• Cumulative Delta: Strong Bullish (`{cum_delta:.2f}`)\n\n"
+          "💡 *Decision:* Institutional buying pressure confirmed. True"
+          " trend continuation."
+      )
+      print("[+] " + alert_msg)
+      send_telegram_alert(alert_msg)
+
+    # Bearish Institutional Distribution / Continuation
+    elif cum_delta < 0 and persistence <= 1:
+      alert_msg = (
+          "🔴 *[Confirmed Bearish Institutional Footprint]*\n\n"
+          f"• Asset: `Gold (GC=F)`\n"
+          f"• Closed Price: `{current_price:.2f}`\n"
+          f"• Volume Z-Score: `{z_score:.2f}`\n"
+          f"• Cumulative Delta: Strong Bearish (`{cum_delta:.2f}`)\n\n"
+          "💡 *Decision:* Institutional selling pressure confirmed. True"
+          " downward continuation."
+      )
+      print("[+] " + alert_msg)
+      send_telegram_alert(alert_msg)
+
+    else:
+      print(
+          "[!] Warning: High volume detected, but cumulative delta/persistence"
+          " do not align (Likely Liquidity Trap / Fakeout). Signal ignored."
+      )
+  else:
+    print("[-] Market is in a quiet regime. No institutional footprint.")
 
 
 if __name__ == "__main__":
-  run_engine()
+  run_institutional_quant_bot()
