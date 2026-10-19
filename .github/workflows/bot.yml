@@ -1,9 +1,9 @@
 name: Python Trading Bot
 
 on:
+  workflow_dispatch: # باش تقدر تشغلو حتى يدوي وقت ما بغيتي
   schedule:
-    - cron: '*/5 * * * 1-5'
-  workflow_dispatch:
+    - cron: '*/5 * * * *' # هاد السطر هو لي كيخلي GitHub يشغلو بوحده كل 5 دقائق أوماتيك
 
 jobs:
   run-bot:
