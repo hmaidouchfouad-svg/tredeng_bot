@@ -6,7 +6,7 @@ import yfinance as yf
 
 
 def send_telegram_alert(message):
-  """إرسال التنبيه مباشرة إلى Telegram"""
+  """Send alert directly to Telegram"""
   token = os.environ.get('TELEGRAM_TOKEN')
   chat_id = os.environ.get('TELEGRAM_CHAT_ID')
 
@@ -26,7 +26,16 @@ def send_telegram_alert(message):
 
 
 def run_institutional_quant_bot():
-  # 1. جلب بيانات الذهب 5 دقائق
+  # رسالة تأكيد البدء لتتأكد فوراً أن التليجرام متصل ويشتغل
+  startup_msg = (
+      '🚀 *[Institutional Bot Started]*\n\n'
+      '• Asset: `Gold (GC=F)`\n'
+      '• Status: Online and scanning market data...\n'
+      '• Mode: Active institutional quantitative filters.'
+  )
+  send_telegram_alert(startup_msg)
+
+  # 1. Fetch 5-minute Gold data
   df = yf.download(
       'GC=F', period='5d', interval='5m', progress=False, auto_adjust=True
   )
@@ -38,20 +47,20 @@ def run_institutional_quant_bot():
   if isinstance(df.columns, pd.MultiIndex):
     df.columns = df.columns.get_level_values(0)
 
-  # 2. استبعاد الشمعة الحية الجارية لتفادي أخطاء التأخير
+  # 2. Exclude the live/unclosed candle
   df = df.iloc[:-1]
 
   if len(df) < 30:
     print('[-] Not enough closed candles.')
     return
 
-  # 3. حساب الفوليوم Z-Score
+  # 3. Volume Z-Score calculation
   window = 20
   df['Vol_Mean'] = df['Volume'].rolling(window=window).mean()
   df['Vol_Std'] = df['Volume'].rolling(window=window).std()
   df['Volume_ZScore'] = (df['Volume'] - df['Vol_Mean']) / df['Vol_Std']
 
-  # 4. حساب الدلتا التقريبية والتدفق التراكمي
+  # 4. Estimated Delta and Cumulative Delta Flow
   candle_range = df['High'] - df['Low']
   df['Pressure'] = (
       (2 * df['Close'] - df['High'] - df['Low']) / candle_range
@@ -59,12 +68,12 @@ def run_institutional_quant_bot():
   df['Estimated_Delta'] = df['Volume'] * df['Pressure']
   df['Cumulative_Delta'] = df['Estimated_Delta'].rolling(window=10).sum()
 
-  # 5. استمرارية الاتجاه (State Persistence)
+  # 5. Trend Persistence
   df['Trend_Persistence'] = (df['Close'] > df['Close'].shift(1)).rolling(
       window=3
   ).sum()
 
-  # قراءة الشمعة المغلقة الأخيرة
+  # Read latest closed candle
   latest = df.iloc[-1]
   current_price = float(latest['Close'])
   z_score = float(latest['Volume_ZScore'])
@@ -75,29 +84,29 @@ def run_institutional_quant_bot():
       f'[+] Analysis complete. Price: {current_price}, Z-Score: {z_score:.2f}'
   )
 
-  # 6. فلترة الصفقات وإرسال التنبيه فقط عند وجود إشارة مؤكدة
+  # 6. Trade Decision Logic Gate
   if z_score > 2.5:
-    # صفقة شراء مؤكدة
+    # Bullish setup
     if cum_delta > 0 and persistence >= 2:
       msg = (
-          '🟢 *[إشارة شراء مؤسساتية مؤكدة]*\n\n'
-          f'• الأصل: `Gold (GC=F)`\n'
-          f'• السعر: `{current_price:.2f}`\n'
+          '🟢 *[Bullish Institutional Signal]*\n\n'
+          f'• Asset: `Gold (GC=F)`\n'
+          f'• Price: `{current_price:.2f}`\n'
           f'• Z-Score: `{z_score:.2f}`\n'
-          f'• التدفق التراكمي: صاعد (`{cum_delta:.2f}`)\n\n'
-          '💡 *القرار:* دخول حيتان حقيقي.'
+          f'• Cumulative Delta: Bullish (`{cum_delta:.2f}`)\n\n'
+          '💡 *Decision:* Confirmed institutional buying.'
       )
       send_telegram_alert(msg)
 
-    # صفقة بيع مؤكدة
+    # Bearish setup
     elif cum_delta < 0 and persistence <= 1:
       msg = (
-          '🔴 *[إشارة بيع مؤسساتية مؤكدة]*\n\n'
-          f'• الأصل: `Gold (GC=F)`\n'
-          f'• السعر: `{current_price:.2f}`\n'
+          '🔴 *[Bearish Institutional Signal]*\n\n'
+          f'• Asset: `Gold (GC=F)`\n'
+          f'• Price: `{current_price:.2f}`\n'
           f'• Z-Score: `{z_score:.2f}`\n'
-          f'• التدفق التراكمي: هابط (`{cum_delta:.2f}`)\n\n'
-          '💡 *القرار:* ضغط بيعي مؤسساتي حقيقي.'
+          f'• Cumulative Delta: Bearish (`{cum_delta:.2f}`)\n\n'
+          '💡 *Decision:* Confirmed institutional selling pressure.'
       )
       send_telegram_alert(msg)
 
