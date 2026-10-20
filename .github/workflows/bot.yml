@@ -2,6 +2,8 @@ name: Python Trading Bot
 
 on:
   workflow_dispatch:
+  repository_dispatch:
+    types: [cron_trigger]
   schedule:
     - cron: '*/5 * * * *'
 
