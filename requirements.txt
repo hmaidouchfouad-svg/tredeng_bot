@@ -1,6 +1,6 @@
-python-telegram-bot
 yfinance
 pandas
+pandas-ta
+scikit-learn
 requests
-flask
-gunicorn
+numpy
