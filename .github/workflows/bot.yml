@@ -1,4 +1,4 @@
-يهname: Python Trading Bot
+name: Python Trading Bot
 
 on:
   workflow_dispatch:
