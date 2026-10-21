@@ -4,7 +4,7 @@
   THE BEAST V2.0 - Institutional / Smart Money Concepts (SMC) Engine (GitHub Actions)
 =================================================================================
   Target       : Gold (GC=F via yfinance)
-  Stack        : yfinance + pandas + pandas_ta + scikit-learn
+  Stack        : yfinance + pandas + scikit-learn
   Core         : RandomForest (direction) + LinearRegression (micro-trend) + Divergence
 =================================================================================
 """
@@ -15,7 +15,6 @@ from datetime import datetime, timezone
 
 import numpy as np
 import pandas as pd
-import pandas_ta as ta
 import requests
 import sys
 import yfinance as yf
@@ -28,10 +27,10 @@ from sklearn.linear_model import LinearRegression
 # =============================================================================
 TELEGRAM_TOKEN = "8462317233:AAENwGgJ4puoKhQSAWR0Dg3f5nCsPPqncUk"
 CHAT_ID = "7432584346"
-SYMBOL = "GC=F"                      # Gold Futures on yfinance
+SYMBOL = "GC=F"                     # Gold Futures on yfinance
 
-TF_ENTRY = "5m"                      # Execution timeframe set to 5m
-BARS = 1200                          # bars pulled per timeframe
+TF_ENTRY = "5m"                     # Execution timeframe set to 5m
+BARS = 1200                         # bars pulled per timeframe
 
 # --- AI / ENGINE ---
 RF_ESTIMATORS = 500
@@ -41,27 +40,27 @@ MIN_TRAIN_SAMPLES = 250
 MIN_BARS_TO_TRADE = 300
 
 # --- ENTRY GATES (MODIFIED FOR BALANCE & DIVERGENCE) ---
-RF_BUY_THRESHOLD = 0.60              # Probability threshold for Buy
-RF_SELL_THRESHOLD = 0.60             # Probability threshold for Sell
-MIN_CONFLUENCE = 4                   # At least 4 conditions out of 6 must match
+RF_BUY_THRESHOLD = 0.60             # Probability threshold for Buy
+RF_SELL_THRESHOLD = 0.60            # Probability threshold for Sell
+MIN_CONFLUENCE = 4                  # At least 4 conditions out of 6 must match
 
 # --- SMC GEOMETRY ---
-SWING_LEFT = 2                       # fractal strength (bars)
+SWING_LEFT = 2                      # fractal strength (bars)
 SWING_RIGHT = 2
-OB_LOOKAHEAD = 5                     # bars allowed for displacement leg
-OB_DISP_ATR = 0.8                    # displacement threshold (x ATR)
-PD_LOOKBACK = 150                    # dealing-range window
-LIQ_LOOKBACK = 12                    # bars defining the resting liquidity pool
-LIQ_MIN_WICK_ATR = 0.10              # minimum excursion to count as a sweep
-FVG_TOUCH_ATR = 0.35                 # "inside / hugging" a gap tolerance
-FEATURE_FALLBACK = 8.0               # value used when no live FVG/OB exists
+OB_LOOKAHEAD = 5                    # bars allowed for displacement leg
+OB_DISP_ATR = 0.8                   # displacement threshold (x ATR)
+PD_LOOKBACK = 150                   # dealing-range window
+LIQ_LOOKBACK = 12                   # bars defining the resting liquidity pool
+LIQ_MIN_WICK_ATR = 0.10             # minimum excursion to count as a sweep
+FVG_TOUCH_ATR = 0.35                # "inside / hugging" a gap tolerance
+FEATURE_FALLBACK = 8.0              # value used when no live FVG/OB exists
 
 # --- RISK ---
-SL_ATR_MULT = 1.8                    # ATR-based stop
-SL_MAX_ATR_MULT = 3.0                # hard cap
-SL_STRUCT_BUFFER_ATR = 0.35          # buffer beyond the protective swing
-TP1_R = 1.5                          # first target in R
-TP2_MIN_R = 2.5                      # minimum runner target in R
+SL_ATR_MULT = 1.8                   # ATR-based stop
+SL_MAX_ATR_MULT = 3.0               # hard cap
+SL_STRUCT_BUFFER_ATR = 0.35         # buffer beyond the protective swing
+TP1_R = 1.5                         # first target in R
+TP2_MIN_R = 2.5                     # minimum runner target in R
 
 # --- SESSIONS (UTC hours) ---
 SESSION_OFFSET_HOURS = 0
@@ -103,6 +102,24 @@ def fetch_candles_yf(symbol, interval, period="5d"):
     except Exception as e:
         print(f"[YFINANCE ERROR] {e}")
         return None
+
+
+# =============================================================================
+# NATIVE REPLACEMENTS FOR PANDAS_TA (ENSURES ZERO DEPENDENCY ERRORS)
+# =============================================================================
+def native_linreg(series, length=73):
+    def calc(x):
+        slope, intercept = np.polyfit(np.arange(length), x, 1)
+        return slope * (length - 1) + intercept
+    return series.rolling(window=length).apply(calc, raw=True)
+
+def native_mfi(high, low, close, volume, length=14):
+    tp = (high + low + close) / 3
+    rmf = tp * volume
+    pos_flow = rmf.where(tp > tp.shift(1), 0.0).rolling(window=length).sum()
+    neg_flow = rmf.where(tp < tp.shift(1), 0.0).rolling(window=length).sum()
+    mfi = 100 - (100 / (1 + (pos_flow / (neg_flow + 1e-9))))
+    return mfi
 
 
 # =============================================================================
@@ -221,19 +238,17 @@ def build_smc_features(df):
     atr = np.where(atr <= 0, 1e-6, atr)
     df["atr"] = atr
 
-    df["lsma"] = ta.linreg(df["close"], length=73)
+    df["lsma"] = native_linreg(df["close"], length=73)
     direction = (df["close"] - df["close"].shift(10)).abs()
     noise = (df["close"] - df["close"].shift(1)).abs().rolling(window=10).sum()
     df["er"] = (direction / (noise + 1e-6)).clip(lower=0.0, upper=1.0)
-    df["mfi"] = ta.mfi(df["high"], df["low"], df["close"], df["tick_volume"], length=14)
+    df["mfi"] = native_mfi(df["high"], df["low"], df["close"], df["tick_volume"], length=14)
     df["rv"] = df["tick_volume"] / (df["tick_volume"].rolling(window=20).mean() + 1e-6)
     df["log_ret"] = np.log(df["close"] / df["close"].shift(1))
     df["vel"] = df["log_ret"].diff()
     df["lsma_slope"] = (df["lsma"] - df["lsma"].shift(10)) / atr
 
     # --- ADDING DIVERGENCE CALCULATION ---
-    # Bullish Divergence: Price makes lower low while MFI makes higher low
-    # Bearish Divergence: Price makes higher high while MFI makes lower high
     df["div_bull"] = ((df["low"] < df["low"].shift(4)) & (df["mfi"] > df["mfi"].shift(4))).astype(float)
     df["div_bear"] = ((df["high"] > df["high"].shift(4)) & (df["mfi"] < df["mfi"].shift(4))).astype(float)
 
@@ -479,7 +494,6 @@ class TradingBeast:
             print(f"[TELEGRAM ERROR] {e}")
 
     def run_cycle(self):
-        # Fetching 5m candles directly
         df_m5 = fetch_candles_yf(SYMBOL, interval=TF_ENTRY, period="5d")
 
         if df_m5 is None or len(df_m5) < MIN_BARS_TO_TRADE:
@@ -492,13 +506,11 @@ class TradingBeast:
             print("[WARN] Not enough training samples.")
             return
 
-        # Train Random Forest on historical data
         X = merged[FEATURES]
         y = merged["target"]
         self.rf_model.fit(X, y)
         rf_classes = {cls: idx for idx, cls in enumerate(self.rf_model.classes_)}
 
-        # --- USE THE LAST COMPLETED / CLOSED CANDLE (iloc[-2]) ---
         latest = merged.iloc[-2]
         price = latest["close"]
         atr = latest["atr"]
@@ -508,7 +520,6 @@ class TradingBeast:
         prob_buy = probs[rf_classes.get(1.0, 1)]
         prob_sell = probs[rf_classes.get(0.0, 0)]
 
-        # --- FLEXIBLE CONFLUENCE CONDITIONS (INCLUDING DIVERGENCE) ---
         confluence_buy = sum([
             latest["struct"] > 0,
             latest["fvg_b_touch"] > 0,
@@ -529,7 +540,6 @@ class TradingBeast:
 
         print(f"[{utc_now().strftime('%H:%M:%S')}] GOLD: ${price:.2f} | Buy Prob: {prob_buy:.2f} (Conf: {confluence_buy}) | Sell Prob: {prob_sell:.2f} (Conf: {confluence_sell})")
 
-        # Check signals based on threshold and flexible confluence
         if prob_buy >= RF_BUY_THRESHOLD and confluence_buy >= MIN_CONFLUENCE:
             p = self.risk.plan("BUY", price, atr, latest, digits=self.digits)
             msg = f"🚀 *BEAST BUY SIGNAL (XAUUSD - 5m Closed)*\nPrice: `{price}`\nSL: `{p['sl']}` | TP1: `{p['tp1']}` | TP2: `{p['tp2']}`\nAI Prob: `{prob_buy:.2f}` | Confluence: `{confluence_buy}/6`"
