@@ -1,11 +1,11 @@
 # -*- coding: utf-8 -*-
 """
 =================================================================================
-  THE BEAST V3.5 - SECRET INSTITUTIONAL ABSORPTION & HEARTBEAT ENGINE
+  THE BEAST V3.5 - INSTANT RUN NOTIFICATION & BANK ABSORPTION ENGINE
 =================================================================================
   Target        : Gold (GC=F via yfinance)
   Stack         : yfinance + pandas + scikit-learn
-  Core          : Micro-Absorption Engine + Order Flow Imbalance + Telegram Heartbeat
+  Core          : Startup Ping + Institutional Footprint + Instant Signal Alert
 =================================================================================
 """
 
@@ -89,7 +89,7 @@ def build_bank_features(df):
     df["atr"] = wilder_atr(df, 14).fillna(1.0)
     df["log_ret"] = np.log(df["close"] / df["close"].shift(1)).fillna(0.0)
     
-    # 1. SECRET FEATURE: MICRO-ABSORPTION
+    # MICRO-ABSORPTION
     price_span = (df["high"].rolling(3).max() - df["low"].rolling(3).min()) / df["atr"]
     vol_avg = df["tick_volume"].rolling(10).mean() + 1e-9
     vol_ratio = df["tick_volume"] / vol_avg
@@ -98,16 +98,16 @@ def build_bank_features(df):
     df["bank_absorption_buy"] = (is_absorbed & (df["close"] > df["open"])).astype(float)
     df["bank_absorption_sell"] = (is_absorbed & (df["close"] < df["open"])).astype(float)
     
-    # 2. DELTA SPIKE
+    # DELTA SPIKE
     body = (df["close"] - df["open"]).abs()
     df["delta_spike"] = np.where((body > 1.5 * df["atr"]) & (vol_ratio > 1.8), np.sign(df["close"] - df["open"]), 0.0)
     
-    # 3. FVG IMBALANCE
+    # FVG IMBALANCE
     fvg_b = df["low"] > df["high"].shift(2)
     fvg_s = df["high"] < df["low"].shift(2)
     df["fvg_imbalance"] = np.where(fvg_b, 1.0, np.where(fvg_s, -1.0, 0.0))
     
-    # 4. INSTITUTIONAL STRUCTURE FLOW
+    # INSTITUTIONAL STRUCTURE FLOW
     ma_fast = df["close"].rolling(8).mean()
     ma_slow = df["close"].rolling(30).mean()
     df["structure_flow"] = np.where(ma_fast > ma_slow, 1.0, -1.0)
@@ -174,15 +174,12 @@ class TradingBeast:
         price = latest["close"]
         now_time = datetime.now(timezone.utc)
 
-        # 1. HEARTBEAT MESSAGE AT STARTUP / HOURLY UPDATE
-        if now_time.minute < 10:
-            status_msg = (
-                f"🟢 *THE BEAST BOT IS ACTIVE*\n\n"
-                f"💰 *Current Gold Price:* `${price:.2f}`\n"
-                f"⏰ *Time UTC:* `{now_time.strftime('%H:%M')}`\n"
-                f"📊 *Status:* Scanning institutional order flow..."
-            )
-            self.send_telegram(status_msg)
+        # 1. ALWAYS SEND RUN NOTIFICATION AT STARTUP
+        startup_msg = (
+            f"⚡ *THE BEAST RUNNING...*\n"
+            f"💰 *Gold:* `${price:.2f}` | ⏰ `{now_time.strftime('%H:%M:%S')} UTC`"
+        )
+        self.send_telegram(startup_msg)
 
         X = merged[FEATURES]
         y = merged["target"]
@@ -210,10 +207,11 @@ class TradingBeast:
 
         print(f"[{now_time.strftime('%H:%M:%S')}] GOLD: ${price:.2f} | BUY Prob: {prob_buy:.2f} (Conf: {buy_conf}) | SELL Prob: {prob_sell:.2f} (Conf: {sell_conf})")
 
+        # 2. SEND TRADE SIGNAL IF CONDITIONS MATCH
         if prob_buy >= RF_BUY_THRESHOLD and buy_conf >= MIN_CONFLUENCE:
             p = self.risk.plan("BUY", price, atr)
             msg = (
-                f"🧠 *AI BANK ABSORPTION BUY (XAUUSD)*\n\n"
+                f"🚀 *AI BANK ABSORPTION BUY (XAUUSD)*\n\n"
                 f"📈 *Entry:* `{price:.2f}`\n"
                 f"🛑 *Stop Loss:* `{p['sl']:.2f}`\n"
                 f"🎯 *Target 1:* `{p['tp1']:.2f}`\n"
@@ -227,7 +225,7 @@ class TradingBeast:
         elif prob_sell >= RF_SELL_THRESHOLD and sell_conf >= MIN_CONFLUENCE:
             p = self.risk.plan("SELL", price, atr)
             msg = (
-                f"🧠 *AI BANK ABSORPTION SELL (XAUUSD)*\n\n"
+                f"🔻 *AI BANK ABSORPTION SELL (XAUUSD)*\n\n"
                 f"📉 *Entry:* `{price:.2f}`\n"
                 f"🛑 *Stop Loss:* `{p['sl']:.2f}`\n"
                 f"🎯 *Target 1:* `{p['tp1']:.2f}`\n"
@@ -238,7 +236,7 @@ class TradingBeast:
             print(msg)
             self.send_telegram(msg)
         else:
-            print("ℹ️ Scanning institutional order flow...")
+            print("ℹ️ No strong trade setup on this candle. Exiting.")
 
     def start(self):
         try:
