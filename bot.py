@@ -165,7 +165,8 @@ class TradingBeast:
     def send_telegram(self, msg):
         try:
             url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage?chat_id={CHAT_ID}&text={msg}&parse_mode=Markdown"
-            requests.get(url, timeout=5)
+            res = requests.get(url, timeout=10)
+            print(f"[TELEGRAM RESPONSE] Status: {res.status_code}")
         except Exception as e:
             print(f"[TELEGRAM ERROR] {e}")
 
@@ -173,7 +174,7 @@ class TradingBeast:
         df_m5 = fetch_candles_twelve_data(SYMBOL, INTERVAL)
 
         if df_m5 is None or len(df_m5) < MIN_BARS_TO_TRADE:
-            print("[WARN] Fetching live data from Twelve Data...")
+            print("[WARN] Could not fetch live data from Twelve Data.")
             return
 
         merged = build_locked_poc_features(df_m5)
@@ -184,13 +185,19 @@ class TradingBeast:
         price = latest["close"]
         now_time = datetime.now(timezone.utc)
 
-        # Startup Ping
+        # -----------------------------------------------------------------
+        # 1. ALWAYS SEND RUNNING NOTIFICATION AT STARTUP (رسالة إثبات التشغيل)
+        # -----------------------------------------------------------------
         startup_msg = (
-            f"⚡ *THE BEAST V7.0 (TWELVE DATA) RUNNING*\n"
-            f"💰 *XAU/USD:* `${price:.2f}` | ⏰ `{now_time.strftime('%H:%M:%S')} UTC`"
+            f"⚡ *THE BEAST V7.0 (TWELVE DATA) RUNNING...*\n"
+            f"💰 *XAU/USD Live:* `${price:.2f}`\n"
+            f"⏰ *Time:* `{now_time.strftime('%Y-%m-%d %H:%M:%S')} UTC`"
         )
         self.send_telegram(startup_msg)
 
+        # -----------------------------------------------------------------
+        # 2. AI MODEL TRAINING & EVALUATION
+        # -----------------------------------------------------------------
         X = merged[FEATURES]
         y = merged["target"]
         self.rf_model.fit(X, y)
@@ -217,6 +224,9 @@ class TradingBeast:
 
         print(f"[{now_time.strftime('%H:%M:%S')}] XAU/USD: ${price:.2f} | BUY Prob: {prob_buy:.2f} (Conf: {buy_conf}) | SELL Prob: {prob_sell:.2f} (Conf: {sell_conf})")
 
+        # -----------------------------------------------------------------
+        # 3. SEND TRADE SIGNAL IF CONFLUENCE MATCHES (رسالة الصفقة المباشرة)
+        # -----------------------------------------------------------------
         if prob_buy >= RF_BUY_THRESHOLD and buy_conf >= MIN_CONFLUENCE:
             p = self.risk.plan("BUY", price, atr)
             msg = (
