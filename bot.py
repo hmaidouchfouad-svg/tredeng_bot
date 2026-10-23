@@ -1,14 +1,11 @@
 # -*- coding: utf-8 -*-
 """
 =================================================================================
-  THE BEAST V3.5 - INSTANT RUN NOTIFICATION & BANK ABSORPTION ENGINE
-=================================================================================
-  Target        : Gold (GC=F via yfinance)
-  Stack         : yfinance + pandas + scikit-learn
-  Core          : Startup Ping + Institutional Footprint + Instant Signal Alert
+  THE BEAST V3.5 - INSTANT NOTIFICATION ENGINE (SECURE SECRETS EDITION)
 =================================================================================
 """
 
+import os
 import time
 import traceback
 from datetime import datetime, timezone
@@ -22,10 +19,10 @@ import yfinance as yf
 from sklearn.ensemble import RandomForestClassifier
 
 # =============================================================================
-# CONFIGURATION
+# SECURE CONFIGURATION (Fetch from GitHub Secrets or Fallback)
 # =============================================================================
-TELEGRAM_TOKEN = "8462317233:AAENwGgJ4puoKhQSAWR0Dg3f5nCsPPqncUk"
-CHAT_ID = "7432584346"
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "8462317233:AAENwGgJ4puoKhQSAWR0Dg3f5nCsPPqncUk")
+CHAT_ID = os.environ.get("CHAT_ID", "7432584346")
 SYMBOL = "GC=F"                     # Gold Futures
 
 TF_ENTRY = "5m"                     # 5m Timeframe
@@ -36,20 +33,16 @@ RF_ESTIMATORS = 500
 MIN_TRAIN_SAMPLES = 200
 MIN_BARS_TO_TRADE = 250
 
-RF_BUY_THRESHOLD = 0.52             # High precision threshold
+RF_BUY_THRESHOLD = 0.52             
 RF_SELL_THRESHOLD = 0.52            
-MIN_CONFLUENCE = 2                  # Requires 2 Solid Bank Footprints
+MIN_CONFLUENCE = 2                  
 
 # --- RISK MANAGEMENT ---
 SL_ATR_MULT = 1.6                   
-SL_MAX_ATR_MULT = 2.8               
 TP1_R = 1.5                         
 TP2_MIN_R = 2.5                     
 
 
-# =============================================================================
-# DATA ENGINE
-# =============================================================================
 def fetch_candles_yf(symbol, interval, period="5d"):
     try:
         df = yf.download(tickers=symbol, period=period, interval=interval, progress=False)
@@ -78,9 +71,6 @@ def wilder_atr(df, length=14):
     return tr.ewm(alpha=1.0 / length, adjust=False, min_periods=length).mean()
 
 
-# =============================================================================
-# AI INSTITUTIONAL ABSORPTION ENGINE
-# =============================================================================
 FEATURES = ["log_ret", "bank_absorption_buy", "bank_absorption_sell", "delta_spike", "fvg_imbalance", "structure_flow"]
 
 def build_bank_features(df):
@@ -119,9 +109,6 @@ def build_bank_features(df):
     return df.dropna(subset=FEATURES + ["target"]).reset_index(drop=True)
 
 
-# =============================================================================
-# RISK MANAGER
-# =============================================================================
 class RiskManager:
     @staticmethod
     def plan(side, price, atr, digits=2):
@@ -143,9 +130,6 @@ class RiskManager:
         }
 
 
-# =============================================================================
-# CORE BEAST ENGINE
-# =============================================================================
 class TradingBeast:
     def __init__(self):
         print("--- [SYSTEM] THE BEAST V3.5 ONLINE ---")
@@ -155,7 +139,8 @@ class TradingBeast:
     def send_telegram(self, msg):
         try:
             url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage?chat_id={CHAT_ID}&text={msg}&parse_mode=Markdown"
-            requests.get(url, timeout=5)
+            res = requests.get(url, timeout=5)
+            print(f"[TELEGRAM RESPONSE] Status: {res.status_code}")
         except Exception as e:
             print(f"[TELEGRAM ERROR] {e}")
 
@@ -235,8 +220,6 @@ class TradingBeast:
             )
             print(msg)
             self.send_telegram(msg)
-        else:
-            print("ℹ️ No strong trade setup on this candle. Exiting.")
 
     def start(self):
         try:
