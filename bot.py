@@ -1,7 +1,10 @@
 # -*- coding: utf-8 -*-
 """
 =================================================================================
-  THE BEAST V3.5 - INSTANT NOTIFICATION ENGINE (SECURE SECRETS EDITION)
+  THE BEAST V7.0 - TWELVE DATA LIVE SPOT & LOCKED POC ENGINE
+=================================================================================
+  Target        : Spot Gold (XAU/USD via Twelve Data API)
+  Core          : Live API Data + Rolling POC + Institutional Volume Commitment
 =================================================================================
 """
 
@@ -14,53 +17,73 @@ import numpy as np
 import pandas as pd
 import requests
 import sys
-import yfinance as yf
 
 from sklearn.ensemble import RandomForestClassifier
 
 # =============================================================================
-# SECURE CONFIGURATION (Fetch from GitHub Secrets or Fallback)
+# SECURE CONFIGURATION (GitHub Secrets)
 # =============================================================================
-TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "8462317233:AAENwGgJ4puoKhQSAWR0Dg3f5nCsPPqncUk")
-CHAT_ID = os.environ.get("CHAT_ID", "7432584346")
-SYMBOL = "GC=F"                     # Gold Futures
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "")
+CHAT_ID = os.environ.get("CHAT_ID", "")
+TWELVE_DATA_API_KEY = os.environ.get("TWELVE_DATA_API_KEY", "")
 
-TF_ENTRY = "5m"                     # 5m Timeframe
-BARS = 1200                         
+SYMBOL = "XAU/USD"                  # Twelve Data format for Spot Gold
+INTERVAL = "5min"                   # 5m Timeframe
 
-# --- AI & INSTITUTIONAL GATES ---
-RF_ESTIMATORS = 500
+# --- INSTITUTIONAL AI PARAMETERS ---
+RF_ESTIMATORS = 600
 MIN_TRAIN_SAMPLES = 200
 MIN_BARS_TO_TRADE = 250
 
-RF_BUY_THRESHOLD = 0.52             
-RF_SELL_THRESHOLD = 0.52            
-MIN_CONFLUENCE = 2                  
+RF_BUY_THRESHOLD = 0.55
+RF_SELL_THRESHOLD = 0.55
+MIN_CONFLUENCE = 2
 
-# --- RISK MANAGEMENT ---
-SL_ATR_MULT = 1.6                   
-TP1_R = 1.5                         
-TP2_MIN_R = 2.5                     
+# --- RISK ENGINE ---
+SL_ATR_MULT = 1.4
+TP1_R = 2.0
+TP2_MIN_R = 3.5
 
 
-def fetch_candles_yf(symbol, interval, period="5d"):
+def fetch_candles_twelve_data(symbol, interval):
     try:
-        df = yf.download(tickers=symbol, period=period, interval=interval, progress=False)
-        if df is None or df.empty:
+        url = f"https://api.twelvedata.com/time_series?symbol={symbol}&interval={interval}&outputsize=1200&apikey={TWELVE_DATA_API_KEY}"
+        res = requests.get(url, timeout=10)
+        data = res.json()
+        
+        if "values" not in data:
+            print(f"[TWELVE DATA ERROR] {data}")
             return None
-        
-        if isinstance(df.columns, pd.MultiIndex):
-            df.columns = df.columns.get_level_values(0)
             
-        df = df.reset_index()
-        time_col = 'Datetime' if 'Datetime' in df.columns else 'Date'
+        df = pd.DataFrame(data["values"])
         
-        df['time'] = (df[time_col].astype('int64') // 10**9).astype(int)
-        df = df.rename(columns={'Open': 'open', 'High': 'high', 'Low': 'low', 'Close': 'close', 'Volume': 'tick_volume'})
-        df = df[['time', 'open', 'high', 'low', 'close', 'tick_volume']].copy()
-        return df.sort_values('time').reset_index(drop=True)
+        # Rename columns to match engine
+        df = df.rename(columns={
+            'datetime': 'time_str',
+            'open': 'open',
+            'high': 'high',
+            'low': 'low',
+            'close': 'close',
+            'volume': 'tick_volume'
+        })
+        
+        # Twelve Data returns newest first, so we reverse it
+        df = df.iloc[::-1].reset_index(drop=True)
+        
+        # Convert data types safely
+        for col in ['open', 'high', 'low', 'close']:
+            df[col] = df[col].astype(float)
+            
+        if 'tick_volume' in df.columns:
+            df['tick_volume'] = pd.to_numeric(df['tick_volume'], errors='coerce').fillna(1.0)
+        else:
+            df['tick_volume'] = 1.0
+            
+        df['time'] = pd.to_datetime(df['time_str']).astype('int64') // 10**9
+        df = df[['time', 'open', 'high', 'low', 'close', 'tick_volume']]
+        return df
     except Exception as e:
-        print(f"[YFINANCE ERROR] {e}")
+        print(f"[FETCH ERROR] {e}")
         return None
 
 
@@ -71,40 +94,43 @@ def wilder_atr(df, length=14):
     return tr.ewm(alpha=1.0 / length, adjust=False, min_periods=length).mean()
 
 
-FEATURES = ["log_ret", "bank_absorption_buy", "bank_absorption_sell", "delta_spike", "fvg_imbalance", "structure_flow"]
+# =============================================================================
+# LOCKED INSTITUTIONAL POC & VOLUME NODE ENGINE
+# =============================================================================
+FEATURES = ["poc_distance", "volume_commitment", "institutional_breakout", "price_velocity"]
 
-def build_bank_features(df):
+def build_locked_poc_features(df):
     df = df.reset_index(drop=True)
     
     df["atr"] = wilder_atr(df, 14).fillna(1.0)
-    df["log_ret"] = np.log(df["close"] / df["close"].shift(1)).fillna(0.0)
     
-    # MICRO-ABSORPTION
-    price_span = (df["high"].rolling(3).max() - df["low"].rolling(3).min()) / df["atr"]
-    vol_avg = df["tick_volume"].rolling(10).mean() + 1e-9
-    vol_ratio = df["tick_volume"] / vol_avg
+    # 1. ROLLING POINT OF CONTROL (POC) APPROXIMATION
+    typical_price = (df["high"] + df["low"] + df["close"]) / 3.0
+    rolling_vol = df["tick_volume"].rolling(40).sum() + 1e-9
+    rolling_vol_price = (typical_price * df["tick_volume"]).rolling(40).sum()
+    df["rolling_poc"] = rolling_vol_price / rolling_vol
     
-    is_absorbed = (price_span < 1.2) & (vol_ratio > 1.7)
-    df["bank_absorption_buy"] = (is_absorbed & (df["close"] > df["open"])).astype(float)
-    df["bank_absorption_sell"] = (is_absorbed & (df["close"] < df["open"])).astype(float)
+    df["poc_distance"] = (df["close"] - df["rolling_poc"]) / df["atr"]
     
-    # DELTA SPIKE
-    body = (df["close"] - df["open"]).abs()
-    df["delta_spike"] = np.where((body > 1.5 * df["atr"]) & (vol_ratio > 1.8), np.sign(df["close"] - df["open"]), 0.0)
+    # 2. VOLUME COMMITMENT
+    vol_avg = df["tick_volume"].rolling(20).mean() + 1e-9
+    df["volume_commitment"] = df["tick_volume"] / vol_avg
     
-    # FVG IMBALANCE
-    fvg_b = df["low"] > df["high"].shift(2)
-    fvg_s = df["high"] < df["low"].shift(2)
-    df["fvg_imbalance"] = np.where(fvg_b, 1.0, np.where(fvg_s, -1.0, 0.0))
+    # 3. INSTITUTIONAL BREAKOUT
+    high_20 = df["high"].rolling(20).max().shift(1)
+    low_20 = df["low"].rolling(20).min().shift(1)
     
-    # INSTITUTIONAL STRUCTURE FLOW
-    ma_fast = df["close"].rolling(8).mean()
-    ma_slow = df["close"].rolling(30).mean()
-    df["structure_flow"] = np.where(ma_fast > ma_slow, 1.0, -1.0)
+    breakout_up = (df["close"] > high_20) & (df["volume_commitment"] > 2.2)
+    breakout_down = (df["close"] < low_20) & (df["volume_commitment"] > 2.2)
     
-    # AI TARGET
+    df["institutional_breakout"] = np.where(breakout_up, 1.0, np.where(breakout_down, -1.0, 0.0))
+    
+    # 4. PRICE VELOCITY
+    df["price_velocity"] = (df["close"] - df["close"].shift(2)) / df["atr"]
+    
+    # TARGET PREDICTION
     fwd = df["close"].shift(-3)
-    df["target"] = ((fwd - df["close"]) > 0.20 * df["atr"]).astype(float)
+    df["target"] = ((fwd - df["close"]) > 0.30 * df["atr"]).astype(float)
     
     return df.dropna(subset=FEATURES + ["target"]).reset_index(drop=True)
 
@@ -132,26 +158,25 @@ class RiskManager:
 
 class TradingBeast:
     def __init__(self):
-        print("--- [SYSTEM] THE BEAST V3.5 ONLINE ---")
+        print("--- [SYSTEM] THE BEAST V7.0 (TWELVE DATA + LOCKED POC) ONLINE ---")
         self.rf_model = RandomForestClassifier(n_estimators=RF_ESTIMATORS, random_state=42, n_jobs=-1)
         self.risk = RiskManager()
 
     def send_telegram(self, msg):
         try:
             url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage?chat_id={CHAT_ID}&text={msg}&parse_mode=Markdown"
-            res = requests.get(url, timeout=5)
-            print(f"[TELEGRAM RESPONSE] Status: {res.status_code}")
+            requests.get(url, timeout=5)
         except Exception as e:
             print(f"[TELEGRAM ERROR] {e}")
 
     def run_cycle(self):
-        df_m5 = fetch_candles_yf(SYMBOL, interval=TF_ENTRY, period="5d")
+        df_m5 = fetch_candles_twelve_data(SYMBOL, INTERVAL)
 
         if df_m5 is None or len(df_m5) < MIN_BARS_TO_TRADE:
-            print("[WARN] Fetching fresh market data...")
+            print("[WARN] Fetching live data from Twelve Data...")
             return
 
-        merged = build_bank_features(df_m5)
+        merged = build_locked_poc_features(df_m5)
         if len(merged) < MIN_TRAIN_SAMPLES:
             return
 
@@ -159,10 +184,10 @@ class TradingBeast:
         price = latest["close"]
         now_time = datetime.now(timezone.utc)
 
-        # 1. ALWAYS SEND RUN NOTIFICATION AT STARTUP
+        # Startup Ping
         startup_msg = (
-            f"⚡ *THE BEAST RUNNING...*\n"
-            f"💰 *Gold:* `${price:.2f}` | ⏰ `{now_time.strftime('%H:%M:%S')} UTC`"
+            f"⚡ *THE BEAST V7.0 (TWELVE DATA) RUNNING*\n"
+            f"💰 *XAU/USD:* `${price:.2f}` | ⏰ `{now_time.strftime('%H:%M:%S')} UTC`"
         )
         self.send_telegram(startup_msg)
 
@@ -177,32 +202,31 @@ class TradingBeast:
         prob_sell = probs[0] if len(probs) > 1 else 0.5
 
         buy_conf = sum([
-            latest["bank_absorption_buy"] > 0,
-            latest["delta_spike"] > 0,
-            latest["fvg_imbalance"] > 0,
-            latest["structure_flow"] > 0
+            latest["poc_distance"] > 0.5,
+            latest["volume_commitment"] > 2.0,
+            latest["institutional_breakout"] > 0,
+            latest["price_velocity"] > 0.5
         ])
 
         sell_conf = sum([
-            latest["bank_absorption_sell"] > 0,
-            latest["delta_spike"] < 0,
-            latest["fvg_imbalance"] < 0,
-            latest["structure_flow"] < 0
+            latest["poc_distance"] < -0.5,
+            latest["volume_commitment"] > 2.0,
+            latest["institutional_breakout"] < 0,
+            latest["price_velocity"] < -0.5
         ])
 
-        print(f"[{now_time.strftime('%H:%M:%S')}] GOLD: ${price:.2f} | BUY Prob: {prob_buy:.2f} (Conf: {buy_conf}) | SELL Prob: {prob_sell:.2f} (Conf: {sell_conf})")
+        print(f"[{now_time.strftime('%H:%M:%S')}] XAU/USD: ${price:.2f} | BUY Prob: {prob_buy:.2f} (Conf: {buy_conf}) | SELL Prob: {prob_sell:.2f} (Conf: {sell_conf})")
 
-        # 2. SEND TRADE SIGNAL IF CONDITIONS MATCH
         if prob_buy >= RF_BUY_THRESHOLD and buy_conf >= MIN_CONFLUENCE:
             p = self.risk.plan("BUY", price, atr)
             msg = (
-                f"🚀 *AI BANK ABSORPTION BUY (XAUUSD)*\n\n"
+                f"🚀 *TWELVE DATA LIVE INSTITUTIONAL BUY*\n\n"
                 f"📈 *Entry:* `{price:.2f}`\n"
                 f"🛑 *Stop Loss:* `{p['sl']:.2f}`\n"
                 f"🎯 *Target 1:* `{p['tp1']:.2f}`\n"
                 f"🏆 *Target 2:* `{p['tp2']:.2f}`\n\n"
                 f"🤖 *AI Confidence:* `{prob_buy:.2f}`\n"
-                f"⚡ *Bank Footprint:* `{buy_conf}/4`"
+                f"⚡ *Locked Confluence:* `{buy_conf}/4`"
             )
             print(msg)
             self.send_telegram(msg)
@@ -210,13 +234,13 @@ class TradingBeast:
         elif prob_sell >= RF_SELL_THRESHOLD and sell_conf >= MIN_CONFLUENCE:
             p = self.risk.plan("SELL", price, atr)
             msg = (
-                f"🔻 *AI BANK ABSORPTION SELL (XAUUSD)*\n\n"
+                f"🔻 *TWELVE DATA LIVE INSTITUTIONAL SELL*\n\n"
                 f"📉 *Entry:* `{price:.2f}`\n"
                 f"🛑 *Stop Loss:* `{p['sl']:.2f}`\n"
                 f"🎯 *Target 1:* `{p['tp1']:.2f}`\n"
                 f"🏆 *Target 2:* `{p['tp2']:.2f}`\n\n"
                 f"🤖 *AI Confidence:* `{prob_sell:.2f}`\n"
-                f"⚡ *Bank Footprint:* `{sell_conf}/4`"
+                f"⚡ *Locked Confluence:* `{sell_conf}/4`"
             )
             print(msg)
             self.send_telegram(msg)
