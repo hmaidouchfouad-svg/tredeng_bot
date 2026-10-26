@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
 """
 =================================================================================
-  THE BEAST V7.0 - ULTIMATE CLOB & MICRO-STRUCTURE TWELVE DATA ENGINE
+  THE BEAST V7.0 - TWELVE DATA LIVE SPOT & LOCKED POC ENGINE
 =================================================================================
   Target        : Spot Gold (XAU/USD via Twelve Data API)
-  Core          : Institutional Sweep & Trap Detector + Telegram Alert Engine
+  Core          : Proven Telegram Method + Rolling POC & Volume Commitment
 =================================================================================
 """
 
@@ -21,7 +21,7 @@ import sys
 from sklearn.ensemble import RandomForestClassifier
 
 # =============================================================================
-# SECURE CONFIGURATION (GitHub Secrets / Active Tokens)
+# SECURE CONFIGURATION (GitHub Secrets / Fallback to active tokens)
 # =============================================================================
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "8462317233:AAENwGgJ4puoKhQSAWR0Dg3f5nCsPPqncUk")
 CHAT_ID = os.environ.get("CHAT_ID", "7432584346")
@@ -30,11 +30,16 @@ TWELVE_DATA_API_KEY = os.environ.get("TWELVE_DATA_API_KEY", "d9dc7faf9e5c4b73988
 SYMBOL = "XAU/USD"                  # Twelve Data format for Spot Gold
 INTERVAL = "5min"                   # 5m Timeframe
 
-# --- INSTITUTIONAL AI & RISK PARAMETERS ---
+# --- INSTITUTIONAL AI PARAMETERS ---
 RF_ESTIMATORS = 600
 MIN_TRAIN_SAMPLES = 200
 MIN_BARS_TO_TRADE = 250
 
+RF_BUY_THRESHOLD = 0.55
+RF_SELL_THRESHOLD = 0.55
+MIN_CONFLUENCE = 2
+
+# --- RISK ENGINE ---
 SL_ATR_MULT = 1.4
 TP1_R = 2.0
 TP2_MIN_R = 3.5
@@ -87,7 +92,7 @@ def wilder_atr(df, length=14):
 
 
 # =============================================================================
-# LOCKED INSTITUTIONAL POC & MICRO-STRUCTURE SWEEP ENGINE
+# LOCKED INSTITUTIONAL POC & VOLUME NODE ENGINE
 # =============================================================================
 FEATURES = ["poc_distance", "volume_commitment", "institutional_breakout", "price_velocity"]
 
@@ -124,7 +129,7 @@ def build_locked_poc_features(df):
 class RiskManager:
     @staticmethod
     def plan(side, price, atr, digits=2):
-        if side in ["BUY_TRAP", "BUY_BREAKOUT"]:
+        if side == "BUY":
             sl = price - SL_ATR_MULT * atr
             risk = max(price - sl, 0.1 * atr)
             tp1 = price + risk * TP1_R
@@ -144,10 +149,11 @@ class RiskManager:
 
 class TradingBeast:
     def __init__(self):
-        print("--- [SYSTEM] THE BEAST V7.0 (CLOB MICRO-STRUCTURE ENGINE) ONLINE ---")
+        print("--- [SYSTEM] THE BEAST V7.0 (PROVEN TELEGRAM METHOD) ONLINE ---")
         self.rf_model = RandomForestClassifier(n_estimators=RF_ESTIMATORS, random_state=42, n_jobs=-1)
         self.risk = RiskManager()
 
+    # --- الطريقة المضمونة والمجربة لإرسال الرسائل عبر تيليجرام ---
     def send_telegram(self, msg):
         try:
             url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage?chat_id={CHAT_ID}&text={msg}&parse_mode=Markdown"
@@ -156,93 +162,94 @@ class TradingBeast:
         except Exception as e:
             print(f"[TELEGRAM ERROR] {e}")
 
-    def analyze_market_signal(self, df_m5):
+    def run_cycle(self):
+        # 1. إرسال رسالة فورية عند بداية تشغيل البوت لتأكيد الاتصال
+        now_time = datetime.now(timezone.utc)
+        startup_msg = (
+            f"⚡ *THE BEAST V7.0 IS ONLINE*\n"
+            f"⏰ *Time:* `{now_time.strftime('%H:%M:%S')} UTC`\n"
+            f"📊 *Status:* Fetching live XAU/USD data..."
+        )
+        self.send_telegram(startup_msg)
+
+        # 2. جلب الداتا الحية
+        df_m5 = fetch_candles_twelve_data(SYMBOL, INTERVAL)
+
+        if df_m5 is None or len(df_m5) < MIN_BARS_TO_TRADE:
+            print("[WARN] Fetching live data from Twelve Data...")
+            return
+
         merged = build_locked_poc_features(df_m5)
         if len(merged) < MIN_TRAIN_SAMPLES:
-            return None
+            return
 
         latest = merged.iloc[-1]
         price = latest["close"]
-        atr = latest["atr"]
 
-        # Train ML Model for Confidence Scoring
+        # إرسال السعر الحالي للتأكد من أن جلب البيانات تم بنجاح
+        price_msg = f"💰 *XAU/USD Live Spot:* `${price:.2f}`"
+        self.send_telegram(price_msg)
+
         X = merged[FEATURES]
         y = merged["target"]
         self.rf_model.fit(X, y)
 
+        atr = latest["atr"]
         X_curr = merged[FEATURES].iloc[[-1]]
         probs = self.rf_model.predict_proba(X_curr)[0]
         prob_buy = probs[1] if len(probs) > 1 else 0.5
         prob_sell = probs[0] if len(probs) > 1 else 0.5
 
-        # Microstructure Candle Details (The Deep Secret Logic)
-        prev_high = df_m5['high'].iloc[-20:-1].max()
-        prev_low = df_m5['low'].iloc[-20:-1].min()
-        
-        current_candle = df_m5.iloc[-1]
-        body_size = abs(current_candle['close'] - current_candle['open'])
-        upper_wick = current_candle['high'] - max(current_candle['open'], current_candle['close'])
-        lower_wick = min(current_candle['open'], current_candle['close']) - current_candle['low']
-        vol_ratio = latest["volume_commitment"]
+        buy_conf = sum([
+            latest["poc_distance"] > 0.5,
+            latest["volume_commitment"] > 2.0,
+            latest["institutional_breakout"] > 0,
+            latest["price_velocity"] > 0.5
+        ])
 
-        # 1. Stop Hunt / Trap Detection (CLOB Liquidity Sweep & Reversal)
-        if current_candle['high'] > prev_high and upper_wick > (body_size * 1.5) and vol_ratio > 1.2:
-            return {"type": "SELL_TRAP", "reason": "Stop Hunt at High (Liquidity Sweep & Reversal)", "price": price, "atr": atr, "conf": prob_sell}
-        elif current_candle['low'] < prev_low and lower_wick > (body_size * 1.5) and vol_ratio > 1.2:
-            return {"type": "BUY_TRAP", "reason": "Stop Hunt at Low (Liquidity Sweep & Reversal)", "price": price, "atr": atr, "conf": prob_buy}
+        sell_conf = sum([
+            latest["poc_distance"] < -0.5,
+            latest["volume_commitment"] > 2.0,
+            latest["institutional_breakout"] < 0,
+            latest["price_velocity"] < -0.5
+        ])
 
-        # 2. Institutional Breakout / True Expansion (BOS)
-        if current_candle['close'] > prev_high and body_size > (upper_wick * 2) and vol_ratio > 1.8:
-            return {"type": "BUY_BREAKOUT", "reason": "Institutional Expansion / True Breakout", "price": price, "atr": atr, "conf": prob_buy}
-        elif current_candle['close'] < prev_low and body_size > (lower_wick * 2) and vol_ratio > 1.8:
-            return {"type": "SELL_BREAKOUT", "reason": "Institutional Expansion / True Breakout", "price": price, "atr": atr, "conf": prob_sell}
+        print(f"[{now_time.strftime('%H:%M:%S')}] XAU/USD: ${price:.2f} | BUY Prob: {prob_buy:.2f} (Conf: {buy_conf}) | SELL Prob: {prob_sell:.2f} (Conf: {sell_conf})")
 
-        return None
-
-    def run_cycle(self):
-        now_time = datetime.now(timezone.utc)
-        print(f"[{now_time.strftime('%H:%M:%S')}] Fetching Twelve Data XAU/USD feed...")
-
-        df_m5 = fetch_candles_twelve_data(SYMBOL, INTERVAL)
-        if df_m5 is None or len(df_m5) < MIN_BARS_TO_TRADE:
-            print("[WARN] Insufficient data or waiting for Twelve Data update...")
-            return
-
-        signal = self.analyze_market_signal(df_m5)
-        if signal:
-            p = self.risk.plan(signal["type"], signal["price"], signal["atr"])
-            action_emoji = "🚀" if "BUY" in signal["type"] else "🔻"
-            
+        # 3. إرسال إشارة الصفقة الحقيقية فور تحقق الشروط
+        if prob_buy >= RF_BUY_THRESHOLD and buy_conf >= MIN_CONFLUENCE:
+            p = self.risk.plan("BUY", price, atr)
             msg = (
-                f"{action_emoji} *INSTITUTIONAL SIGNAL (XAU/USD)*\n\n"
-                f"⚡ *Type:* `{signal['type']}`\n"
-                f"📌 *Reason:* {signal['reason']}\n"
-                f"📈 *Entry Price:* `{signal['price']:.2f}`\n"
+                f"🚀 *INSTITUTIONAL BUY SIGNAL (XAU/USD)*\n\n"
+                f"📈 *Entry:* `{price:.2f}`\n"
                 f"🛑 *Stop Loss:* `{p['sl']:.2f}`\n"
                 f"🎯 *Target 1:* `{p['tp1']:.2f}`\n"
                 f"🏆 *Target 2:* `{p['tp2']:.2f}`\n\n"
-                f"🤖 *AI Confidence:* `{signal['conf']:.2f}`\n"
-                f"⏰ *Time (UTC):* `{datetime.now(timezone.utc).strftime('%H:%M:%S')}`"
+                f"🤖 *AI Confidence:* `{prob_buy:.2f}`\n"
+                f"⚡ *Locked Confluence:* `{buy_conf}/4`"
+            )
+            print(msg)
+            self.send_telegram(msg)
+
+        elif prob_sell >= RF_SELL_THRESHOLD and sell_conf >= MIN_CONFLUENCE:
+            p = self.risk.plan("SELL", price, atr)
+            msg = (
+                f"🔻 *INSTITUTIONAL SELL SIGNAL (XAU/USD)*\n\n"
+                f"📉 *Entry:* `{price:.2f}`\n"
+                f"🛑 *Stop Loss:* `{p['sl']:.2f}`\n"
+                f"🎯 *Target 1:* `{p['tp1']:.2f}`\n"
+                f"🏆 *Target 2:* `{p['tp2']:.2f}`\n\n"
+                f"🤖 *AI Confidence:* `{prob_sell:.2f}`\n"
+                f"⚡ *Locked Confluence:* `{sell_conf}/4`"
             )
             print(msg)
             self.send_telegram(msg)
 
     def start(self):
-        startup_msg = (
-            f"⚡ *THE BEAST V7.0 IS ONLINE*\n"
-            f"📊 *Mode:* Institutional CLOB Sweep & Micro-Structure Monitor\n"
-            f"🎯 *Target:* XAU/USD (Twelve Data)"
-        )
-        self.send_telegram(startup_msg)
-        
-        while True:
-            try:
-                self.run_cycle()
-            except Exception as e:
-                print(f"[ERROR] {e}")
-            
-            # Sleep for 60 seconds before checking for new candles
-            time.sleep(60)
+        try:
+            self.run_cycle()
+        except Exception as e:
+            print(f"[ERROR] {e}")
 
 
 if __name__ == "__main__":
