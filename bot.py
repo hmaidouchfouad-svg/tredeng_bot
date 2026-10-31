@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
 """
 =================================================================================
-  THE BEAST V7.0 - TWELVE DATA LIVE SPOT & LOCKED POC ENGINE
+  THE BEAST V8.0 - APEX INSTITUTIONAL CLOB & SMART MONEY PREDATOR ENGINE
 =================================================================================
   Target        : Spot Gold (XAU/USD via Twelve Data API)
-  Core          : Proven Telegram Method + Rolling POC & Volume Commitment
+  Core          : Advanced Market Maker Trap Detector + High-Precision Telegram Alert
 =================================================================================
 """
 
@@ -21,7 +21,7 @@ import sys
 from sklearn.ensemble import RandomForestClassifier
 
 # =============================================================================
-# SECURE CONFIGURATION (GitHub Secrets / Fallback to active tokens)
+# SECURE CONFIGURATION
 # =============================================================================
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "8462317233:AAENwGgJ4puoKhQSAWR0Dg3f5nCsPPqncUk")
 CHAT_ID = os.environ.get("CHAT_ID", "7432584346")
@@ -30,19 +30,15 @@ TWELVE_DATA_API_KEY = os.environ.get("TWELVE_DATA_API_KEY", "d9dc7faf9e5c4b73988
 SYMBOL = "XAU/USD"                  # Twelve Data format for Spot Gold
 INTERVAL = "5min"                   # 5m Timeframe
 
-# --- INSTITUTIONAL AI PARAMETERS ---
-RF_ESTIMATORS = 600
-MIN_TRAIN_SAMPLES = 200
-MIN_BARS_TO_TRADE = 250
+# --- APEX INSTITUTIONAL & RISK PARAMETERS ---
+RF_ESTIMATORS = 800
+MIN_TRAIN_SAMPLES = 250
+MIN_BARS_TO_TRADE = 300
 
-RF_BUY_THRESHOLD = 0.55
-RF_SELL_THRESHOLD = 0.55
-MIN_CONFLUENCE = 2
-
-# --- RISK ENGINE ---
-SL_ATR_MULT = 1.4
-TP1_R = 2.0
-TP2_MIN_R = 3.5
+SL_ATR_MULT = 1.3
+TP1_R = 2.2
+TP2_MIN_R = 4.0
+MIN_AI_CONFIDENCE = 0.68            # نسبة ثقة صارمة جداً لتقليل الإشارات الكاذبة
 
 
 def fetch_candles_twelve_data(symbol, interval):
@@ -92,36 +88,55 @@ def wilder_atr(df, length=14):
 
 
 # =============================================================================
-# LOCKED INSTITUTIONAL POC & VOLUME NODE ENGINE
+# APEX SMART MONEY & CLOB MICRO-STRUCTURE FEATURES ENGINE
 # =============================================================================
-FEATURES = ["poc_distance", "volume_commitment", "institutional_breakout", "price_velocity"]
+FEATURES = [
+    "poc_distance", 
+    "volume_commitment", 
+    "institutional_breakout", 
+    "price_velocity", 
+    "order_flow_imbalance", 
+    "liquidity_sweep_intensity"
+]
 
-def build_locked_poc_features(df):
+def build_apex_features(df):
     df = df.reset_index(drop=True)
     
     df["atr"] = wilder_atr(df, 14).fillna(1.0)
     
+    # Volume Profile & Point of Control (POC)
     typical_price = (df["high"] + df["low"] + df["close"]) / 3.0
     rolling_vol = df["tick_volume"].rolling(40).sum() + 1e-9
     rolling_vol_price = (typical_price * df["tick_volume"]).rolling(40).sum()
     df["rolling_poc"] = rolling_vol_price / rolling_vol
-    
     df["poc_distance"] = (df["close"] - df["rolling_poc"]) / df["atr"]
     
+    # Volume Commitment & Order Flow Imbalance
     vol_avg = df["tick_volume"].rolling(20).mean() + 1e-9
     df["volume_commitment"] = df["tick_volume"] / vol_avg
     
+    body = df["close"] - df["open"]
+    total_range = (df["high"] - df["low"]).replace(0, 1e-9)
+    df["order_flow_imbalance"] = body / total_range
+    
+    # Institutional Breakouts & Stop Hunt Metrics
     high_20 = df["high"].rolling(20).max().shift(1)
     low_20 = df["low"].rolling(20).min().shift(1)
     
-    breakout_up = (df["close"] > high_20) & (df["volume_commitment"] > 2.2)
-    breakout_down = (df["close"] < low_20) & (df["volume_commitment"] > 2.2)
-    
+    breakout_up = (df["close"] > high_20) & (df["volume_commitment"] > 2.0)
+    breakout_down = (df["close"] < low_20) & (df["volume_commitment"] > 2.0)
     df["institutional_breakout"] = np.where(breakout_up, 1.0, np.where(breakout_down, -1.0, 0.0))
+    
     df["price_velocity"] = (df["close"] - df["close"].shift(2)) / df["atr"]
     
-    fwd = df["close"].shift(-3)
-    df["target"] = ((fwd - df["close"]) > 0.30 * df["atr"]).astype(float)
+    # Liquidity Sweep Intensity (Wick vs Body ratio)
+    upper_wick = df["high"] - df[["open", "close"]].max(axis=1)
+    lower_wick = df[["open", "close"]].min(axis=1) - df["low"]
+    df["liquidity_sweep_intensity"] = (upper_wick - lower_wick) / df["atr"]
+    
+    # Advanced Target Mapping for Machine Learning
+    fwd_return = df["close"].shift(-3) - df["close"]
+    df["target"] = (fwd_return > 0.35 * df["atr"]).astype(float)
     
     return df.dropna(subset=FEATURES + ["target"]).reset_index(drop=True)
 
@@ -129,7 +144,7 @@ def build_locked_poc_features(df):
 class RiskManager:
     @staticmethod
     def plan(side, price, atr, digits=2):
-        if side == "BUY":
+        if side in ["BUY_TRAP_REVERSAL", "BUY_EXPANSION"]:
             sl = price - SL_ATR_MULT * atr
             risk = max(price - sl, 0.1 * atr)
             tp1 = price + risk * TP1_R
@@ -147,13 +162,18 @@ class RiskManager:
         }
 
 
-class TradingBeast:
+class TradingBeastApex:
     def __init__(self):
-        print("--- [SYSTEM] THE BEAST V7.0 (PROVEN TELEGRAM METHOD) ONLINE ---")
-        self.rf_model = RandomForestClassifier(n_estimators=RF_ESTIMATORS, random_state=42, n_jobs=-1)
+        print("--- [SYSTEM] THE BEAST V8.0 - APEX PREDATOR ENGINE ONLINE ---")
+        self.rf_model = RandomForestClassifier(
+            n_estimators=RF_ESTIMATORS, 
+            max_depth=12, 
+            min_samples_split=10, 
+            random_state=42, 
+            n_jobs=-1
+        )
         self.risk = RiskManager()
 
-    # --- الطريقة المضمونة والمجربة لإرسال الرسائل عبر تيليجرام ---
     def send_telegram(self, msg):
         try:
             url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage?chat_id={CHAT_ID}&text={msg}&parse_mode=Markdown"
@@ -162,96 +182,120 @@ class TradingBeast:
         except Exception as e:
             print(f"[TELEGRAM ERROR] {e}")
 
-    def run_cycle(self):
-        # 1. إرسال رسالة فورية عند بداية تشغيل البوت لتأكيد الاتصال
-        now_time = datetime.now(timezone.utc)
-        startup_msg = (
-            f"⚡ *THE BEAST V7.0 IS ONLINE*\n"
-            f"⏰ *Time:* `{now_time.strftime('%H:%M:%S')} UTC`\n"
-            f"📊 *Status:* Fetching live XAU/USD data..."
-        )
-        self.send_telegram(startup_msg)
-
-        # 2. جلب الداتا الحية
-        df_m5 = fetch_candles_twelve_data(SYMBOL, INTERVAL)
-
-        if df_m5 is None or len(df_m5) < MIN_BARS_TO_TRADE:
-            print("[WARN] Fetching live data from Twelve Data...")
-            return
-
-        merged = build_locked_poc_features(df_m5)
+    def analyze_market_signal(self, df_m5):
+        merged = build_apex_features(df_m5)
         if len(merged) < MIN_TRAIN_SAMPLES:
-            return
+            return None
 
-        latest = merged.iloc[-1]
-        price = latest["close"]
-
-        # إرسال السعر الحالي للتأكد من أن جلب البيانات تم بنجاح
-        price_msg = f"💰 *XAU/USD Live Spot:* `${price:.2f}`"
-        self.send_telegram(price_msg)
-
+        # Train Apex RandomForest Classifier
         X = merged[FEATURES]
         y = merged["target"]
         self.rf_model.fit(X, y)
 
+        latest = merged.iloc[-1]
+        price = latest["close"]
         atr = latest["atr"]
+
         X_curr = merged[FEATURES].iloc[[-1]]
         probs = self.rf_model.predict_proba(X_curr)[0]
         prob_buy = probs[1] if len(probs) > 1 else 0.5
         prob_sell = probs[0] if len(probs) > 1 else 0.5
 
-        buy_conf = sum([
-            latest["poc_distance"] > 0.5,
-            latest["volume_commitment"] > 2.0,
-            latest["institutional_breakout"] > 0,
-            latest["price_velocity"] > 0.5
-        ])
+        # Micro-structure & Smart Money Trap Detection
+        prev_high = df_m5['high'].iloc[-25:-1].max()
+        prev_low = df_m5['low'].iloc[-25:-1].min()
+        
+        c = df_m5.iloc[-1]
+        body = abs(c['close'] - c['open'])
+        range_val = c['high'] - c['low'] if (c['high'] - c['low']) > 0 else 1e-9
+        upper_wick = c['high'] - max(c['open'], c['close'])
+        lower_wick = min(c['open'], c['close']) - c['low']
+        vol_ratio = latest["volume_commitment"]
 
-        sell_conf = sum([
-            latest["poc_distance"] < -0.5,
-            latest["volume_commitment"] > 2.0,
-            latest["institutional_breakout"] < 0,
-            latest["price_velocity"] < -0.5
-        ])
+        # 1. Apex Stop Hunt / Liquidity Sweep Reversal (Market Maker Trap)
+        if c['high'] > prev_high and upper_wick > (body * 1.4) and vol_ratio > 1.3 and prob_sell >= MIN_AI_CONFIDENCE:
+            return {
+                "type": "SELL_TRAP_REVERSAL", 
+                "reason": "Apex Market Maker Stop Hunt at High (Liquidity Sweep & Reversal)", 
+                "price": price, 
+                "atr": atr, 
+                "conf": prob_sell
+            }
+        elif c['low'] < prev_low and lower_wick > (body * 1.4) and vol_ratio > 1.3 and prob_buy >= MIN_AI_CONFIDENCE:
+            return {
+                "type": "BUY_TRAP_REVERSAL", 
+                "reason": "Apex Market Maker Stop Hunt at Low (Liquidity Sweep & Reversal)", 
+                "price": price, 
+                "atr": atr, 
+                "conf": prob_buy
+            }
 
-        print(f"[{now_time.strftime('%H:%M:%S')}] XAU/USD: ${price:.2f} | BUY Prob: {prob_buy:.2f} (Conf: {buy_conf}) | SELL Prob: {prob_sell:.2f} (Conf: {sell_conf})")
+        # 2. Institutional True Expansion / Break of Structure (BOS)
+        if c['close'] > prev_high and body > (upper_wick * 2.0) and vol_ratio > 1.9 and prob_buy >= MIN_AI_CONFIDENCE:
+            return {
+                "type": "BUY_EXPANSION", 
+                "reason": "Institutional True Expansion (BOS & Order Flow Imbalance)", 
+                "price": price, 
+                "atr": atr, 
+                "conf": prob_buy
+            }
+        elif c['close'] < prev_low and body > (lower_wick * 2.0) and vol_ratio > 1.9 and prob_sell >= MIN_AI_CONFIDENCE:
+            return {
+                "type": "SELL_EXPANSION", 
+                "reason": "Institutional True Expansion (BOS & Order Flow Imbalance)", 
+                "price": price, 
+                "atr": atr, 
+                "conf": prob_sell
+            }
 
-        # 3. إرسال إشارة الصفقة الحقيقية فور تحقق الشروط
-        if prob_buy >= RF_BUY_THRESHOLD and buy_conf >= MIN_CONFLUENCE:
-            p = self.risk.plan("BUY", price, atr)
+        return None
+
+    def run_cycle(self):
+        now_time = datetime.now(timezone.utc)
+        print(f"[{now_time.strftime('%H:%M:%S')}] Apex Scanning XAU/USD feed via Twelve Data...")
+
+        df_m5 = fetch_candles_twelve_data(SYMBOL, INTERVAL)
+        if df_m5 is None or len(df_m5) < MIN_BARS_TO_TRADE:
+            print("[WARN] Insufficient bars or waiting for Twelve Data feed...")
+            return
+
+        signal = self.analyze_market_signal(df_m5)
+        if signal:
+            p = self.risk.plan(signal["type"], signal["price"], signal["atr"])
+            emoji = "🚀" if "BUY" in signal["type"] else "🔻"
+            
             msg = (
-                f"🚀 *INSTITUTIONAL BUY SIGNAL (XAU/USD)*\n\n"
-                f"📈 *Entry:* `{price:.2f}`\n"
+                f"{emoji} *THE BEAST V8.0 - APEX SIGNAL (XAU/USD)*\n\n"
+                f"⚡ *Strategy:* `{signal['type']}`\n"
+                f"📌 *Intelligence:* {signal['reason']}\n"
+                f"📈 *Entry Price:* `{signal['price']:.2f}`\n"
                 f"🛑 *Stop Loss:* `{p['sl']:.2f}`\n"
                 f"🎯 *Target 1:* `{p['tp1']:.2f}`\n"
                 f"🏆 *Target 2:* `{p['tp2']:.2f}`\n\n"
-                f"🤖 *AI Confidence:* `{prob_buy:.2f}`\n"
-                f"⚡ *Locked Confluence:* `{buy_conf}/4`"
-            )
-            print(msg)
-            self.send_telegram(msg)
-
-        elif prob_sell >= RF_SELL_THRESHOLD and sell_conf >= MIN_CONFLUENCE:
-            p = self.risk.plan("SELL", price, atr)
-            msg = (
-                f"🔻 *INSTITUTIONAL SELL SIGNAL (XAU/USD)*\n\n"
-                f"📉 *Entry:* `{price:.2f}`\n"
-                f"🛑 *Stop Loss:* `{p['sl']:.2f}`\n"
-                f"🎯 *Target 1:* `{p['tp1']:.2f}`\n"
-                f"🏆 *Target 2:* `{p['tp2']:.2f}`\n\n"
-                f"🤖 *AI Confidence:* `{prob_sell:.2f}`\n"
-                f"⚡ *Locked Confluence:* `{sell_conf}/4`"
+                f"🤖 *Apex AI Confidence:* `{signal['conf']*100:.1f}%`\n"
+                f"⏰ *Time (UTC):* `{datetime.now(timezone.utc).strftime('%H:%M:%S')}`"
             )
             print(msg)
             self.send_telegram(msg)
 
     def start(self):
-        try:
-            self.run_cycle()
-        except Exception as e:
-            print(f"[ERROR] {e}")
+        startup_msg = (
+            f"⚡ *THE BEAST V8.0 APEX PREDATOR ONLINE*\n"
+            f"🧠 *AI Engine:* Advanced Smart Money & CLOB Micro-Structure\n"
+            f"🎯 *Target:* XAU/USD | *Mode:* Alert-Only Predator"
+        )
+        self.send_telegram(startup_msg)
+        
+        while True:
+            try:
+                self.run_cycle()
+            except Exception as e:
+                print(f"[ERROR] {e}")
+            
+            # فحص دقيق كل 60 ثانية لتتبع الشموع واقتناص الفرص فوراً
+            time.sleep(60)
 
 
 if __name__ == "__main__":
-    bot = TradingBeast()
+    bot = TradingBeastApex()
     bot.start()
